@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Soccer Sprint</title>
+<style>
+  :root { color-scheme: dark; --lime:#c7f464; --ink:#101b22; }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; font-family:system-ui,-apple-system,Segoe UI,sans-serif; background:radial-gradient(circle at top,#213c3a,#0b131b 70%); color:#f4f7f8; display:flex; justify-content:center; padding:22px 12px; }
+  .game { width:min(900px,100%); }
+  header { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:12px; }
+  h1 { margin:0; font-size:clamp(1.7rem,4vw,2.5rem); letter-spacing:-.04em; }
+  h1 span { color:var(--lime); }
+  .subtitle { color:#b8c8c8; margin:4px 0 0; font-size:.94rem; }
+  .stats { display:flex; gap:8px; flex-wrap:wrap; }
+  .stat { background:#17252c; border:1px solid #33464c; border-radius:12px; padding:9px 14px; min-width:86px; text-align:center; }
+  .stat small { display:block; color:#9fb2b5; font-size:.72rem; text-transform:uppercase; letter-spacing:.09em; }
+  .stat strong { font-size:1.3rem; }
+  .field-wrap { position:relative; overflow:hidden; border:2px solid #9cc85a; border-radius:18px; box-shadow:0 18px 55px #0007; background:#247d42; }
+  canvas { display:block; width:100%; height:auto; touch-action:manipulation; }
+  .overlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; padding:20px; background:#07130dc9; text-align:center; }
+  .overlay.hidden { display:none; }
+  .panel { max-width:430px; }
+  .panel h2 { font-size:clamp(1.8rem,5vw,2.7rem); margin:0 0 8px; }
+  .panel p { color:#d0dfd6; line-height:1.5; margin:8px 0 18px; }
+  button { border:0; border-radius:999px; background:var(--lime); color:#172116; padding:12px 20px; font-weight:800; font-size:1rem; cursor:pointer; }
+  button:hover { filter:brightness(1.06); transform:translateY(-1px); }
+  .below { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-top:12px; }
+  .hint { color:#b9c9c8; font-size:.9rem; line-height:1.5; }
+  .controls { display:flex; gap:8px; align-items:center; }
+  .controls button { min-width:46px; padding:10px 14px; }
+  .secondary { background:#24383d; color:#eff8f4; border:1px solid #40575b; }
+  .touch { display:none; margin-top:10px; gap:8px; justify-content:center; }
+  .touch button { border-radius:12px; min-width:56px; background:#24383d; color:#fff; border:1px solid #40575b; }
+  @media (max-width:600px) { body{padding:14px 8px}.stat{min-width:68px;padding:7px 10px}.touch{display:flex}.hint{font-size:.82rem} }
+</style>
+</head>
+<body>
+<main class="game">
+  <header>
+    <div><h1>SOCCER <span>SPRINT</span></h1><p class="subtitle">Beat the defenders. Find the net.</p></div>
+    <div class="stats">
+      <div class="stat"><small>Score</small><strong id="score">0</strong></div>
+      <div class="stat"><small>Level</small><strong id="level">1</strong></div>
+      <div class="stat"><small>Goals left</small><strong id="left">3</strong></div>
+    </div>
+  </header>
+  <div class="field-wrap">
+    <canvas id="field" width="840" height="560" aria-label="Soccer game field"></canvas>
+    <div class="overlay" id="overlay">
+      <div class="panel">
+        <h2 id="overlayTitle">Ready to play?</h2>
+        <p id="overlayText">Move your blue player around the defenders and shoot the ball into the goal. Score 3 goals to advance to the next level!</p>
+        <button id="startBtn">KICK OFF</button>
+      </div>
+    </div>
+  </div>
+  <div class="below">
+    <div class="hint"><b>Controls:</b> WASD or arrow keys to move · Space to shoot<br>On touch screens, use the buttons below. Get close to the ball to control it.</div>
+    <div class="controls"><button class="secondary" id="pauseBtn">Pause</button><button id="restartBtn">Restart ↻</button></div>
+  </div>
+  <div class="touch" aria-label="Touch controls">
+    <button data-key="ArrowLeft">◀</button><button data-key="ArrowUp">▲</button><button data-key="ArrowDown">▼</button><button data-key="ArrowRight">▶</button><button data-key=" ">SHOOT</button>
+  </div>
+</main>
+<script>
+(() => {
+  const canvas = document.getElementById('field');
+  const ctx = canvas.getContext('2d');
+  const $ = id => document.getElementById(id);
+  const W = canvas.width, H = canvas.height;
+  const keys = new Set();
+  let player, ball, defenders, score, level, goalsThisLevel, running, gameOver, paused, lastTime, messageTimer, particles;
+  const goal = { x: W/2-82, y: 22, w:164, h:20 };
+
+  function resetGame() {
+    score = 0; level = 1; goalsThisLevel = 0; gameOver = false; paused = false; running = false;
+    player = {x:W/2, y:H-95, r:17, speed:245, dx:0, dy:-1};
+    ball = {x:W/2, y:H-137, r:10, vx:0, vy:0, owner:true};
+    defenders = []; particles = []; createDefenders();
+    updateStats(); showOverlay('Ready to play?','Move your blue player around the defenders and shoot the ball into the goal. Score 3 goals to advance to the next level!','KICK OFF');
+    $('pauseBtn').textContent = 'Pause'; draw();
+  }
+  function createDefenders() {
+    defenders = [];
+    const count = Math.min(2 + level, 7);
+    for (let i=0;i<count;i++) {
+      defenders.push({x:100+(i+1)*(W-200)/(count+1), y:145+(i%2)*72, r:18, baseY:145+(i%2)*72, phase:i*1.7, speed:45+level*8+(i%3)*12});
+    }
+  }
+  function updateStats() {
+    $('score').textContent=score; $('level').textContent=level; $('left').textContent=Math.max(0,3-goalsThisLevel);
+  }
+  function showOverlay(title,text,button) {
+    $('overlayTitle').textContent=title; $('overlayText').textContent=text; $('startBtn').textContent=button;
+    $('overlay').classList.remove('hidden');
+  }
+  function hideOverlay(){ $('overlay').classList.add('hidden'); }
+  function start() {
+    if (gameOver) resetGame();
+    running=true; paused=false; hideOverlay(); $('pauseBtn').textContent='Pause'; lastTime=performance.now();
+  }
+  function restart(){ resetGame(); }
+  function togglePause() {
+    if(gameOver) return;
+    if(!running){ start(); return; }
+    paused=!paused;
+    if(paused){ showOverlay('Game paused','Take a breather. Your match is waiting.','RESUME'); $('pauseBtn').textContent='Resume'; }
+    else { hideOverlay(); $('pauseBtn').textContent='Pause'; lastTime=performance.now(); }
+  }
+  function shoot() {
+    if(!running || paused || gameOver) return;
+    const dx=ball.x-player.x, dy=ball.y-player.y, dist=Math.hypot(dx,dy);
+    if(dist<75 || ball.owner) {
+      let aimX = W/2-ball.x;
+      let aimY = -Math.max(200, ball.y-30);
+      const len=Math.hypot(aimX,aimY)||1;
+      ball.vx=aimX/len*(570+level*16); ball.vy=aimY/len*(570+level*16);
+      ball.owner=false;
+      player.dx=aimX/(Math.hypot(aimX,aimY)||1); player.dy=-1;
+    } else {
+      // A shot can be attempted after moving close enough to the ball.
+      if(dist<110){ ball.vx=0; ball.vy=-(590+level*15); ball.owner=false; }
+    }
+  }
+  function movePlayer(dt) {
+    let x=0,y=0;
+    if(keys.has('ArrowLeft')||keys.has('a')||keys.has('A')) x--;
+    if(keys.has('ArrowRight')||keys.has('d')||keys.has('D')) x++;
+    if(keys.has('ArrowUp')||keys.has('w')||keys.has('W')) y--;
+    if(keys.has('ArrowDown')||keys.has('s')||keys.has('S')) y++;
+    const len=Math.hypot(x,y);
+    if(len){x/=len;y/=len;player.dx=x;player.dy=y;player.x+=x*player.speed*dt;player.y+=y*player.speed*dt;}
+    player.x=Math.max(30,Math.min(W-30,player.x));
+    player.y=Math.max(65,Math.min(H-32,player.y));
+    if(ball.owner) {
+      ball.x=player.x+player.dx*23;
+      ball.y=player.y+player.dy*23;
+    } else if(Math.hypot(ball.x-player.x,ball.y-player.y)<player.r+ball.r+5 && Math.hypot(ball.vx,ball.vy)<200) {
+      ball.owner=true; ball.vx=0; ball.vy=0;
+    }
+  }
+  function update(dt,t) {
+    movePlayer(dt);
+    defenders.forEach(d=>{
+      d.x += Math.sin(t/700+d.phase)*d.speed*dt;
+      d.x=Math.max(45,Math.min(W-45,d.x));
+      d.y=d.baseY+Math.sin(t/560+d.phase)*10;
+      if(!ball.owner) {
+        const dist=Math.hypot(ball.x-d.x,ball.y-d.y);
+        if(dist<d.r+ball.r+2 && ball.y>goal.y+goal.h) {
+          ball.vx += (ball.x-d.x)*4;
+          ball.vy += 120;
+          ball.x += (ball.x-d.x)*.15;
+          ball.y += (ball.y-d.y)*.15;
+        }
+      }
+      if(Math.hypot(player.x-d.x,player.y-d.y)<player.r+d.r) {
+        const a=Math.atan2(player.y-d.y,player.x-d.x);
+        player.x=d.x+Math.cos(a)*(player.r+d.r+1);
+        player.y=d.y+Math.sin(a)*(player.r+d.r+1);
+      }
+    });
+    if(!ball.owner) {
+      ball.x+=ball.vx*dt; ball.y+=ball.vy*dt;
+      ball.vx*=Math.pow(.985,dt*60); ball.vy*=Math.pow(.985,dt*60);
+      if(ball.x<ball.r||ball.x>W-ball.r){ball.vx*=-.75;ball.x=Math.max(ball.r,Math.min(W-ball.r,ball.x));}
+      if(ball.y>H-ball.r){ball.y=H-ball.r;ball.vy*=-.6;}
+      if(ball.y<=goal.y+goal.h+3 && ball.x>goal.x+8 && ball.x<goal.x+goal.w-8 && ball.vy<0) {
+        score++; goalsThisLevel++; updateStats(); celebrate();
+        if(goalsThisLevel>=3) {
+          level++; goalsThisLevel=0; createDefenders(); updateStats();
+          showOverlay('LEVEL '+level+' UNLOCKED!','Great finishing! The defenders are quicker now. Score 3 more goals to advance.','PLAY NEXT LEVEL');
+          running=false;
+        } else {
+          showOverlay('GOAL!!!','Beautiful finish! '+(3-goalsThisLevel)+' more goal'+(3-goalsThisLevel===1?'':'s')+' to reach the next level.','KICK OFF');
+          running=false;
+        }
+        resetPositions(); return;
+      }
+      if(ball.y<goal.y && (ball.x<goal.x || ball.x>goal.x+goal.w)) {
+        ball.y=goal.y+goal.h+5; ball.vy=Math.abs(ball.vy)*.6;
+      }
+      if(Math.hypot(ball.vx,ball.vy)<20) {
+        ball.owner=false;
+        if(ball.y>H-50){ball.x=player.x+player.dx*23;ball.y=player.y+player.dy*23;ball.owner=true;}
+      }
+    }
+    particles=particles.filter(p=>p.life>0);
+    particles.forEach(p=>{p.x+=p.vx*dt;p.y+=p.vy*dt;p.life-=dt;});
+  }
+  function resetPositions(){
+    player.x=W/2;player.y=H-95;player.dx=0;player.dy=-1;
+    ball.x=W/2;ball.y=H-137;ball.vx=0;ball.vy=0;ball.owner=true;
+  }
+  function celebrate(){
+    for(let i=0;i<70;i++){const a=Math.random()*Math.PI*2,s=80+Math.random()*300;particles.push({x:W/2,y:100,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:1+Math.random()*1.2});}
+  }
+  function drawField(){
+    ctx.fillStyle='#258247';ctx.fillRect(0,0,W,H);
+    for(let i=0;i<8;i++){ctx.fillStyle=i%2?'#258247':'#2b8b4d';ctx.fillRect(0,i*H/8,W,H/8);}
+    ctx.strokeStyle='#d9f4d8';ctx.lineWidth=3;ctx.strokeRect(25,20,W-50,H-40);
+    ctx.beginPath();ctx.moveTo(25,H/2);ctx.lineTo(W-25,H/2);ctx.stroke();
+    ctx.beginPath();ctx.arc(W/2,H/2,70,0,Math.PI*2);ctx.stroke();
+    ctx.strokeRect(W/2-150,20,300,105);ctx.strokeRect(W/2-90,20,180,48);
+    ctx.fillStyle='#e9f7e8';ctx.fillRect(goal.x,goal.y,goal.w,goal.h);
+    ctx.strokeStyle='#fff';ctx.lineWidth=2;
+    for(let x=goal.x+8;x<goal.x+goal.w;x+=12){ctx.beginPath();ctx.moveTo(x,goal.y);ctx.lineTo(x,goal.y+goal.h);ctx.stroke();}
+    ctx.beginPath();ctx.moveTo(goal.x,goal.y+goal.h);ctx.lineTo(goal.x+goal.w,goal.y+goal.h);ctx.stroke();
+    ctx.fillStyle='#ffffff20';ctx.beginPath();ctx.arc(W/2,H-85,75,Math.PI,Math.PI*2);ctx.fill();
+  }
+  function drawPlayer(p,color,number){
+    ctx.save();ctx.shadowColor='#0006';ctx.shadowBlur=8;ctx.shadowOffsetY=4;
+    ctx.fillStyle=color;ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,Math.PI*2);ctx.fill();
+    ctx.shadowColor='transparent';ctx.fillStyle='#fff';ctx.font='bold 12px system-ui';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(number,p.x,p.y+1);
+    ctx.restore();
+  }
+  function drawBall(){
+    ctx.save();ctx.shadowColor='#0006';ctx.shadowBlur=5;ctx.shadowOffsetY=3;
+    ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(ball.x,ball.y,ball.r,0,Math.PI*2);ctx.fill();
+    ctx.shadowColor='transparent';ctx.fillStyle='#202a30';ctx.beginPath();ctx.arc(ball.x,ball.y,3.5,0,Math.PI*2);ctx.fill();
+    for(let i=0;i<5;i++){const a=i*Math.PI*2/5;ctx.beginPath();ctx.arc(ball.x+Math.cos(a)*6,ball.y+Math.sin(a)*6,1.6,0,Math.PI*2);ctx.fill();}
+    ctx.restore();
+  }
+  function draw(){
+    drawField();
+    defenders.forEach((d,i)=>drawPlayer(d,'#e84c4c',String(i+1)));
+    drawPlayer(player,'#3489ff','YOU');
+    drawBall();
+    particles.forEach(p=>{ctx.globalAlpha=Math.max(0,p.life/2);ctx.fillStyle='#d9ff65';ctx.fillRect(p.x,p.y,5,5);});ctx.globalAlpha=1;
+    ctx.fillStyle='#ffffffd9';ctx.font='bold 14px system-ui';ctx.textAlign='left';ctx.fillText('ATTACK ↑',38,H-53);
+    if(!running&&!gameOver&&$('overlay').classList.contains('hidden')===false) { /* overlay handles pause and goals */ }
+  }
+  function loop(now){
+    const dt=Math.min((now-(lastTime||now))/1000,.035);lastTime=now;
+    if(running&&!paused&&!gameOver) update(dt,now);
+    draw();
+    requestAnimationFrame(loop);
+  }
+  window.addEventListener('keydown',e=>{
+    if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown',' '].includes(e.key))e.preventDefault();
+    keys.add(e.key);
+    if(e.key===' '&&!e.repeat)shoot();
+    if(e.key==='Enter'&&!running)start();
+    if(e.key==='Escape')togglePause();
+  });
+  window.addEventListener('keyup',e=>keys.delete(e.key));
+  document.querySelectorAll('[data-key]').forEach(btn=>{
+    const key=btn.dataset.key;
+    const down=e=>{e.preventDefault();keys.add(key);if(key===' ')shoot();};
+    const up=e=>{e.preventDefault();keys.delete(key);};
+    btn.addEventListener('pointerdown',down);btn.addEventListener('pointerup',up);btn.addEventListener('pointerleave',up);btn.addEventListener('pointercancel',up);
+  });
+  $('startBtn').addEventListener('click',()=>{if($('overlayTitle').textContent==='Game paused'){togglePause();return;}start();});
+  $('restartBtn').addEventListener('click',restart);
+  $('pauseBtn').addEventListener('click',togglePause);
+  resetGame();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
